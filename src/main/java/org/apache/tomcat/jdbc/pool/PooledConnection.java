@@ -30,6 +30,11 @@ import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.jdbc.pool.interceptor.ConnectionState;
 
 /**
+ * <p>
+ *  PooledConnection是一个对物理层连接的代理。他主要是记录了一下额外的维护信息，例如最后一次操作的时间、是否已经归还、同步锁、拦截器等，
+ *  用于ConnectionPool的状态管理
+ * </p>
+ * 
  * Represents a pooled connection
  * and holds a reference to the {@link java.sql.Connection} object
  * @version 1.0
@@ -78,6 +83,8 @@ public class PooledConnection {
      */
     private String abandonTrace = null;
     /**
+     * <p>连接最后被操作时间，包括借出、归还、创建</p>
+     * 
      * Timestamp the connection was last 'touched' by the pool
      */
     private volatile long timestamp;
@@ -86,6 +93,11 @@ public class PooledConnection {
      */
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock(false);
     /**
+     * <p>
+     *  只有在disconnect过程中才会设置discarded标签，标志物理连接已经释放。</br>
+     *  discarded表示无力层连接是否释放，released表示PooledConnection是否被释放
+     * </p>
+     * 
      * Set to true if this connection has been discarded by the pool
      */
     private volatile boolean discarded = false;
@@ -173,6 +185,11 @@ public class PooledConnection {
     }
 
     /**
+     * <p>
+     *  执行一次物理层连接过程。在执行完毕后，如果没有配置ConnectionState拦截器，则会给连接设置
+     *  autoCommited、transactionIsolation、readOnly、category属性
+     * </p>
+     * 
      * Connects the underlying connection to the database.
      * @throws SQLException if the method {@link #release()} has been called.
      * @throws SQLException if driver instantiation fails
@@ -336,6 +353,10 @@ public class PooledConnection {
     }
 
     /**
+     * <p>
+     *  默认情况下，返回false。mysql不限制一个活跃连接的存活时间上限，这里保留默认配置即可
+     * </p>
+     * 
      * Returns true if the connection has been connected more than
      * {@link PoolConfiguration#getMaxAge()} milliseconds. false otherwise.
      * @return Returns true if the connection has been connected more than
@@ -359,6 +380,15 @@ public class PooledConnection {
     } //reconnect
 
     /**
+     * <p>
+     *  disconnect会在物理层面直接关闭java.sql.Connection，同时设置discarded标志位true，表示连接已释放。</br>
+     *  在这个过程中，他会处理两个回调操作
+     *  <ol>
+     *      <li>在释放连接之前，调用每个连接器的<code>disconnected</code>方法，通知连接将被释放。ConnectState拦截器在这个状态处理中，会清空连接状态缓存</li>
+     *      <li>在释放连接之后，如果<code>finalize</code>调用每个连接器的<code>reset</code>方法，将连接器和连接之间解除绑定</li>
+     *  </ol>
+     * </p>
+     * 
      * Disconnects the connection. All exceptions are logged using debug level.
      * @param finalize if set to true, a call to {@link ConnectionPool#finalize(PooledConnection)} is called.
      */
@@ -405,6 +435,8 @@ public class PooledConnection {
     }
 
     /**
+     * <p>这个接口仅判断是否需要做验证，而不是去验证</p>
+     * 
      * Returns true if the connection pool is configured
      * to do validation for a certain action.
      * @param action
@@ -429,7 +461,14 @@ public class PooledConnection {
             return false;
     }
 
-    /**Returns true if the object is still valid. if not
+    /**
+     * <p>
+     *  验证一个指定的连接是否有效</br>
+     *  所有验证testOnBorrow/testOnReturn/testWhileIdle/initTest都是在这个接口中执行。</br>
+     *  除了{@link #VALIDATE_INIT}，其他验证均受到<code>validationInterval</code>的限制
+     * </p>
+     * 
+     * Returns true if the object is still valid. if not
      * the pool will call the getExpiredAction() and follow up with one
      * of the four expired methods
      */
@@ -541,6 +580,8 @@ public class PooledConnection {
                 log.debug("Unable to close SQL connection",x);
             }
         }
+        
+        // 只有在release的时候才会这只这个标志，说明物理连接以及被释放
         return released.compareAndSet(false, true);
 
     }
@@ -646,6 +687,12 @@ public class PooledConnection {
     }
 
     /**
+     * <p>
+     *  默认情况下，只有在PoolCleaner启动时(基本都启动，需要执行idle clean)，才会加锁，
+     *  因为一个链接只会分配给一个线程(如果上层应用在多个线程之间共享链接，须自行维护)。
+     *  可以通过useLock，强制加锁，但是一般没有必要
+     * </p>
+     * 
      * Locks the connection only if either {@link PoolConfiguration#isPoolSweeperEnabled()} or
      * {@link PoolConfiguration#getUseLock()} return true. The per connection lock ensures thread safety is
      * multiple threads are performing operations on the connection.

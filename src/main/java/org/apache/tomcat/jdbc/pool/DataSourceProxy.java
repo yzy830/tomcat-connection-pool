@@ -46,6 +46,9 @@ import org.apache.tomcat.jdbc.pool.PoolProperties.InterceptorDefinition;
 public class DataSourceProxy implements PoolConfiguration {
     private static final Log log = LogFactory.getLog(DataSourceProxy.class);
 
+    /**
+     * volatile修饰，是为了{@link DataSourceProxy#createPool}中的二次验证流程
+     * */
     protected volatile ConnectionPool pool = null;
 
     protected volatile PoolConfiguration poolProperties = null;
@@ -104,6 +107,8 @@ public class DataSourceProxy implements PoolConfiguration {
     }
 
     /**
+     * 存在懒加载情况，这里必须同步多线程
+     * 
      * Sets up the connection pool, by creating a pooling driver.
      * @return Driver
      * @throws SQLException

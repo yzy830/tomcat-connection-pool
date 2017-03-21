@@ -23,6 +23,26 @@ import java.util.Map;
 import org.apache.tomcat.jdbc.pool.PoolProperties.InterceptorProperty;
 
 /**
+ * <p>
+ *  JdbcInterceptor可以处理四种事件：
+ *  <ol>
+ *      <li>reset：应用层申请连接或者ConnectionPool直接释放物理层连接</li>
+ *      <li>disconnect: ConnectionPool释放物理层连接</li>
+ *      <li>poolStarted: ConnectionPool完成核心初始化(busy/idle/Cleaner已经创建)</li>
+ *      <li>poolClosed: ConnectionPool关闭</li>
+ *  </ol>
+ *  
+ *  这四个事件分为两组
+ *  (1) connection事件：reset/disconnect
+ *  (2) pool事件：poolStarted/poolClosed
+ *  
+ *  处理poolStarted、poolClosed和connection事件的，是不同的拦截器实例。这一点要注意，特别是对同一个pool的开启和关闭处理拦截器实例不同，容易引起歧义。
+ *  这个是设计的不好的地方，应该把这些事件分拆到不同的接口当中。</br>
+ *  
+ *  具体可以参考{@link ConnectionPool#init(PoolConfiguration)}、{@link ConnectionPool#close(boolean)}、
+ *  {@link ConnectionPool#getConnection()}的实现
+ * </p>
+ * 
  * Abstract class that is to be extended for implementations of interceptors.
  * Everytime an operation is called on the {@link java.sql.Connection} object the
  * {@link #invoke(Object, Method, Object[])} method on the interceptor will be called.

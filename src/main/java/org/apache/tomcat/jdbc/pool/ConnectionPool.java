@@ -124,6 +124,10 @@ public class ConnectionPool {
      */
     private AtomicInteger waitcount = new AtomicInteger(0);
 
+    /**
+     * 这个字段的作用是记录连接池的版本，用于管理面维护。
+     * 如果管理面出发purge操作，那么会立刻清空idle的连接池。busy中的连接不会立刻情况，但是在归还之后，应该会立刻释放
+     */
     private AtomicLong poolVersion = new AtomicLong(Long.MIN_VALUE);
 
     //===============================================================================
@@ -269,6 +273,10 @@ public class ConnectionPool {
 
 
     /**
+     * <p>
+     *  使用拦截器和ProxyConnection对PoolConnection做代理访问，生成一个java.sql.Connection对象
+     * </p>
+     * 
      * configures a pooled connection as a proxy.
      * This Proxy implements {@link java.sql.Connection} and {@link javax.sql.PooledConnection} interfaces.
      * All calls on {@link java.sql.Connection} methods will be propagated down to the actual JDBC connection except for the
@@ -308,6 +316,7 @@ public class ConnectionPool {
         } else {
             JdbcInterceptor next = handler;
             //we have a cached handler, reset it
+            //这里似乎没有必要设置他
             while (next!=null) {
                 next.reset(this, con);
                 next = next.getNext();
@@ -431,6 +440,7 @@ public class ConnectionPool {
             idle = new LinkedBlockingQueue<>();
         }
 
+        // 基础组建之一，PoolCleaner，用于清除abandon/idle/idle validation的连接
         initializePoolCleaner(properties);
 
         //create JMX MBean
@@ -510,6 +520,8 @@ public class ConnectionPool {
     public void initializePoolCleaner(PoolConfiguration properties) {
         //if the evictor thread is supposed to run, start it now
         if (properties.isPoolSweeperEnabled()) {
+            // timeBetweenEvictionRunsMillis真正控制Cleaner的执行时间间隔，其他值，例如removeAbandonedTimeout
+            // 只用于判断。因此，这个值不能设置的太小
             poolCleaner = new PoolCleaner(this, properties.getTimeBetweenEvictionRunsMillis());
             poolCleaner.start();
         } //end if
@@ -527,6 +539,14 @@ public class ConnectionPool {
 //===============================================================================
 
     /**
+     * <p>
+     *  操作包括两个部分：
+     *  <ol>
+     *  <li>打印abandon日志</li>
+     *  <li>释放连接(会直接释放物理层连接)</li>
+     *  </ol>
+     * </p>
+     * 
      * thread safe way to abandon a connection
      * signals a connection to be abandoned.
      * this will disconnect the connection, and log the stack trace if logAbanded=true
@@ -552,6 +572,8 @@ public class ConnectionPool {
     }
 
     /**
+     * <p>这个操作很简单，打印日志，记录suspect为true</p>
+     * 
      * thread safe way to abandon a connection
      * signals a connection to be abandoned.
      * this will disconnect the connection, and log the stack trace if logAbanded=true
@@ -578,6 +600,17 @@ public class ConnectionPool {
     }
 
     /**
+     * <p>
+     *  在ConnectionPool中，<code>release</code>方法的意思是，释放一个PooledConnection。</br>
+     *  一旦对一个PooledConnection调用这个方法，这个PooledConnection就不能再被使用。在释放中，他会做两件事
+     *  <ol>
+     *      <li>
+     *          调用{@link PooledConnection#release()}，直接释放PooledConnection的底层连接。PooledConnection被标志为
+     *          <code>realased = true & discared = true</code> 
+     *      </li>
+     *      <li>清除PooledConnection关联的拦截器和ConnectionProxy(本质上也是一个拦截器)</li>
+     *  </ol>
+     * </p>
      * thread safe way to release a connection
      * @param con PooledConnection
      */
@@ -603,6 +636,12 @@ public class ConnectionPool {
     }
 
     /**
+     * <p>
+     *  尝试从idle队列获得连接，如果失败，并且未达到最大连接数，则创建一个连接。</br>
+     *  如果创建失败，则在idle上等待。如果等待超时，抛出异常
+     * </p>
+     * 
+     * 
      * Thread safe way to retrieve a connection from the pool
      * @param wait - time to wait, overrides the maxWait from the properties,
      * set to -1 if you wish to use maxWait, 0 if you wish no wait time.
@@ -625,6 +664,7 @@ public class ConnectionPool {
                 //configure the connection and return it
                 PooledConnection result = borrowConnection(now, con, username, password);
                 //null should never be returned, but was in a previous impl.
+                // 这里注释错误，null是有可能返回的
                 if (result!=null) return result;
             }
 
@@ -690,6 +730,8 @@ public class ConnectionPool {
     }
 
     /**
+     * <p>创建一个PooledConnection，并执行物理层连接</p>
+     * 
      * Creates a JDBC connection and tries to connect to the database.
      * @param now timestamp of when this was called
      * @param notUsed Argument not used
@@ -742,6 +784,15 @@ public class ConnectionPool {
     }
 
     /**
+     * <p>
+     *  验证一个连接是否可用。如果PooledConnection已经被释放了(Cleaner清理多余idle连接或者验证idle失败)，返回null；
+     *  如果验证失败或者需要重连等情况，则会重新执行物理层连接，再返回这个PooledConnection。
+     *  
+     *  如果执行了物理层重连，连接的autoCommit等属性会被设置，否则，不会设置，由拦截器控制。</br>
+     *  
+     *  严格来说，这里还应该判断Pooled Version，如果已经修改了版本号，则应该释放连接，等上层重新区申请连接
+     * </p>
+     * 
      * Validates and configures a previously idle connection
      * @param now - timestamp
      * @param con - the connection to validate and configure
@@ -756,9 +807,18 @@ public class ConnectionPool {
         try {
             con.lock();
             if (con.isReleased()) {
+                // 这种情况是PooledConnection被释放了。这种是多余的idle连接被清理或者空闲连接验证失败导致的冲突
                 return null;
             }
 
+            /*
+             * 有五种情况会重连
+             * (1) 连接凭证变化。默认不允许
+             * (2) 达到连接的最大值。默认不允许
+             * (3) 连接没有初始化
+             * (4) 连接验证失败
+             * (5) 连接已经被释放
+             * */
             //evaluate username/password change as well as max age functionality
             boolean forceReconnect = con.shouldForceReconnect(username, password) || con.isMaxAgeExpired();
 
@@ -774,6 +834,7 @@ public class ConnectionPool {
                     con.setTimestamp(now);
                     if (getPoolProperties().isLogAbandoned()) {
                         //set the stack trace for this pool
+                        //每次借出都记录strack trace，在发布环境要关闭
                         con.setStackTrace(getThreadDump());
                     }
                     if (!busy.offer(con)) {
@@ -829,6 +890,12 @@ public class ConnectionPool {
         }
     }
     /**
+     * <p>
+     *  这个接口在终止事务(提交或者回滚)。返回值表示操作是否成功</br>
+     *  当autoCommit配置为true时，不做操作，返回true；</br>
+     *  当autoCommit配置为false时，根据rollbackOnReturn和commitOnReturn的配置，回滚或者提交事务，避免未提交的事务由于连接被缓存，持续很长时间。</br>
+     * </p>
+     * 
      * Terminate the current transaction for the given connection.
      * @param con
      * @return <code>true</code> if the connection TX termination succeeded
@@ -860,16 +927,32 @@ public class ConnectionPool {
      * @return true if the connection should be closed
      */
     protected boolean shouldClose(PooledConnection con, int action) {
-        if (con.getConnectionVersion() < getPoolVersion()) return true;
-        if (con.isDiscarded()) return true;
-        if (isClosed()) return true;
-        if (!con.validate(action)) return true;
-        if (!terminateTransaction(con)) return true;
-        if (con.isMaxAgeExpired()) return true;
+        if (con.getConnectionVersion() < getPoolVersion())
+            //这个分支是管理面在清空连接，purge接口
+            return true;
+        if (con.isDiscarded())
+            // 底层连接已经释放，Cleaner并发导致
+            return true;
+        if (isClosed())
+            // connection pool被关闭
+            return true;
+        if (!con.validate(action))
+            // 验证失败
+            return true;
+        if (!terminateTransaction(con))
+            // 终止事务(回滚或者提交)失败
+            return true;
+        if (con.isMaxAgeExpired())
+            // 连接存活时间达到最大值
+            return true;
         else return false;
     }
 
     /**
+     * <p>
+     *  归还连接。如果连接没有超过闲置上限或者启动了Cleaner，连接会被放回idle队列；否则会被释放
+     * </p>
+     * 
      * Returns a connection to the pool
      * If the pool is closed, the connection will be released
      * If the connection is not part of the busy queue, it will be released.
@@ -893,6 +976,9 @@ public class ConnectionPool {
                     if (!shouldClose(con,PooledConnection.VALIDATE_RETURN)) {
                         con.setStackTrace(null);
                         con.setTimestamp(System.currentTimeMillis());
+                        /*
+                         * 这样实现，在高并发的情况下，并不能保证准确性。可以考虑维护一个原子变量
+                         * */
                         if (((idle.size()>=poolProperties.getMaxIdle()) && !poolProperties.isPoolSweeperEnabled()) || (!idle.offer(con))) {
                             if (log.isDebugEnabled()) {
                                 log.debug("Connection ["+con+"] will be closed and not returned to the pool, idle["+idle.size()+"]>=maxIdle["+poolProperties.getMaxIdle()+"] idle.offer failed.");
@@ -918,6 +1004,10 @@ public class ConnectionPool {
     } //checkIn
 
     /**
+     * <p>
+     *  只有当busy / max * 100 >= abandonWhenPercentageFull时，才会执行abandon操作
+     * </p>
+     * 
      * Determines if a connection should be abandoned based on
      * {@link PoolProperties#abandonWhenPercentageFull} setting.
      * @return true if the connection should be abandoned
@@ -1017,8 +1107,11 @@ public class ConnectionPool {
 
 
     protected boolean shouldReleaseIdle(long now, PooledConnection con, long time) {
-        if (con.getConnectionVersion() < getPoolVersion()) return true;
-        else return (con.getReleaseTime()>0) && ((now - time) > con.getReleaseTime()) && (getSize()>getPoolProperties().getMinIdle());
+        if (con.getConnectionVersion() < getPoolVersion()) 
+            return true;
+        else
+            // 这里如果minEvictableIdleTimeMillis被设置为零，会导多余的致闲置连接不能被释放
+            return (con.getReleaseTime()>0) && ((now - time) > con.getReleaseTime()) && (getSize()>getPoolProperties().getMinIdle());
     }
 
     /**
@@ -1091,6 +1184,11 @@ public class ConnectionPool {
     }
 
     /**
+     * <p>
+     * 在没有使用Cleaner并且没有显示使用锁的情况，不能使用这个接口。这个时候PooledConnection可能存在竞争，但是没有同步。</br>
+     * 应该使用purgeOnReturn，仅修改Pool的版本号，在连接归还时释放(release)PooledConnection
+     * </p>
+     * 
      * Purges all connections in the pool.
      * For connections currently in use, these connections will be
      * purged when returned on the pool. This call also
@@ -1277,6 +1375,13 @@ public class ConnectionPool {
         if (poolCleanTimer == null) {
             ClassLoader loader = Thread.currentThread().getContextClassLoader();
             try {
+                // 这段代码的背景是这样的，tomcat-jdbc随tomcat发布，默认部署在$TOMCAT_BASE/lib目录下，这个目录的ClassLoader是
+                // CommonClassLoader，因此ConnectionPool.class.getClassLoader()的返回值是CommonClassLoader。
+                // 而触发这个业务流程的，一般是APP线程(在第一次出获得连接的时候)，这个线程的Context Class Loader是TOMCAT为一个
+                // APP定制的ClassLoader(WebAppClassLoader)。
+                // 如果这里直接创建Timer，那么timer将直接继承WebAppClassLoader，但是这个Timer是属于被tomcate-jdbc使用的，
+                // 这种情况可能会导致后续代码ClassLoader混乱。根据一般约定，线程的Context Class Loader和这个线程业务上下文
+                // 一直，例如lib库里面的代码需要使用业务线程的Context Class Loader来反向加载业务代码
                 Thread.currentThread().setContextClassLoader(ConnectionPool.class.getClassLoader());
                 poolCleanTimer = new Timer("Tomcat JDBC Pool Cleaner["+ System.identityHashCode(ConnectionPool.class.getClassLoader()) + ":"+
                                            System.currentTimeMillis() + "]", true);

@@ -48,46 +48,148 @@ public class PoolProperties implements PoolConfiguration, Cloneable, Serializabl
     private volatile String connectionProperties;
     private volatile int initialSize = 10;
     private volatile int maxActive = DEFAULT_MAX_ACTIVE;
+    /**
+     * 最大闲置连接数。会影响Cleaner和{@link ConnectionPool#returnConnection(PooledConnection)}的行为。
+     * Cleaner根据minIdle工作</br>
+     * {@link ConnectionPool#returnConnection(PooledConnection)}根据maxIdle工作</br>
+     */
     private volatile int maxIdle = maxActive;
+    /**
+     * 最大闲置连接数。会影响Cleaner和{@link ConnectionPool#returnConnection(PooledConnection)}的行为。
+     * Cleaner根据minIdle工作</br>
+     * {@link ConnectionPool#returnConnection(PooledConnection)}根据maxIdle工作</br>
+     */
     private volatile int minIdle = initialSize;
+    /**
+     * 请求连接的最大等待时间
+     */
     private volatile int maxWait = 30000;
+    /**
+     * 这个值与{@link #validatorClassName}只需要配置一个
+     */
     private volatile String validationQuery;
+    /**
+     * 连接验证SQL执行的超时时间，默认使用数据库的查询超时配置
+     */
     private volatile int validationQueryTimeout = -1;
+    /**
+     * 这个值与{@link #validationQuery}只需要配置一个
+     */
     private volatile String validatorClassName;
     private volatile Validator validator;
+    /**
+     * 配置验证时机，配置了
+     */
     private volatile boolean testOnBorrow = false;
     private volatile boolean testOnReturn = false;
     private volatile boolean testWhileIdle = false;
+    /**
+     * 配置Cleaner线程的允许时间间隔。配置为0，则不会创建Cleaner
+     */
     private volatile int timeBetweenEvictionRunsMillis = 5000;
+    /**
+     * 这个值没有作用
+     */
     private volatile int numTestsPerEvictionRun;
+    /**
+     * 一个链接在可以被淘汰之前，闲置的最短时间。也就是在这个时间内，不可以被淘汰。
+     * 如果配置为0，不会淘汰idle的连接(这是一个bug吗？这里设置为零应该可以被淘汰才正常)
+     */
     private volatile int minEvictableIdleTimeMillis = 60000;
+    /**
+     * 这个值没有作用
+     */
     private volatile boolean accessToUnderlyingConnectionAllowed = true;
+    /**
+     * 在tomcat-jdbc中，abandoned connection是指，被申请后，超过removeAbandonedTimeout时间还没有被应用程序
+     * 释放的连接。
+     * 这个标记，用于防止应用程序忘记释放连接。
+     * 当remove abandoned发生时，如果logAbandoned设置为true，那么会打印申请这个连接的调用栈，用于调试。
+     * 因此，在发布环境中，应该讲logAbandoned设置为false，避免不必要的开销
+     */
     private volatile boolean removeAbandoned = false;
+    /**
+     * 这个值用于判断哪些连接被忘记释放了。这个值要被设置为应用程序中，SQL可能执行时间的最大值
+     */
     private volatile int removeAbandonedTimeout = 60;
+    /**
+     * 在发布程序时，应该设置为false
+     */
     private volatile boolean logAbandoned = false;
     private volatile String name = "Tomcat Connection Pool["+(poolCounter.addAndGet(1))+"-"+System.identityHashCode(PoolProperties.class)+"]";
     private volatile String password;
     private volatile String username;
+    /**
+     * 控制验证连接有效性的时间间隔
+     */
     private volatile long validationInterval = 30000;
     private volatile boolean jmxEnabled = true;
+    /**
+     * initSQL和testOnConnect配置一个，则会在创建连接时执行验证
+     */
     private volatile String initSQL;
+    /**
+     * initSQL和testOnConnect配置一个，则会在创建连接时执行验证，一般情况下没有必要设置
+     */
     private volatile boolean testOnConnect =false;
     private volatile String jdbcInterceptors=null;
+    /**
+     * 公平的队列往往总体吞吐量较低，这里需要在性能测试中，看看大压力情况下的性能曲线
+     */
     private volatile boolean fairQueue = true;
+    /**
+     * 这个值应该是可以设置为false的。只影响ConnectionProxy的比较操作，设置为false，ConnectionProxy使用"=="比较字符串</br>
+     * ConnectionProxy中的方法名全部是static final字符串，他应该是使用的方法区的字符串缓存。</br>
+     * <b>***********待测试***********</b>
+     */
     private volatile boolean useEquals = true;
+    /**
+     * 可以控制abandoned connection，只有在busy / maxActive * 100 >= abandonWhenPercentageFull时才会
+     * 执行abandon操作
+     */
     private volatile int abandonWhenPercentageFull = 0;
+    /**
+     * 这个值定义了一个连接能够存活的最大时间。注意，这里是任何连接，而不是闲置连接。</br>
+     * 现在mysql不会关闭一个活跃的连接，因此这个参数不需要设置，保持为0。这个时候ConnectionPool不会因为一个连接存活时间过长而释放他
+     */
     private volatile long maxAge = 0;
     private volatile boolean useLock = false;
     private volatile InterceptorDefinition[] interceptors = null;
+    /**
+     * 这个是与removeAbandonedTimeout类似，但是这个值并不去直接释放掉abandoned connection，而是在logAbandoned为true时，打印一个log
+     * 
+     * 在发布环境中，我们如果将logAbandoned设置为false，这个参数也就没有用，应该设置为0，以免因为这个参数启动一个Cleaner
+     */
     private volatile int suspectTimeout = 0;
     private volatile Object dataSource = null;
     private volatile String dataSourceJNDI = null;
+    /**
+     * 是否允许用户动态传入连接凭证，如果为false，会忽略用户在{@link ConnectionPool#getConnection(String, String)}中
+     * 传入的连接凭证。一般不需要修改，很少有在连接中需要动态传入凭证的需求
+     */
     private volatile boolean alternateUsernameAllowed = false;
+    /**
+     * <code>commitOnReturn</code>和<code>rollbackOnReturn</code>这两个配置只在autoCommit为false的时候生效。
+     * 用于在应用层释放连接之后，做一个rollback或者commit的操作，避免事务一直保留
+     */
     private volatile boolean commitOnReturn = false;
     private volatile boolean rollbackOnReturn = false;
+    /**
+     * 调试目的。如果在连接关闭后对Connection做任何操作，都会抛出异常。但是，ConnectionProxy已经可以检查，似乎没有必要。
+     * 在生产环境和性能测试环境应该关闭
+     */
     private volatile boolean useDisposableConnectionFacade = true;
+    /**
+     * 打印验证失败日志。调试时有用
+     */
     private volatile boolean logValidationErrors = false;
+    /**
+     * 在获得连接等阻塞过程中，如果遇到终端异常，是否终端当前线程
+     */
     private volatile boolean propagateInterruptState = false;
+    /**
+     * 在连接池初始化操作中，如果遇到异常，是否忽略
+     */
     private volatile boolean ignoreExceptionOnPreLoad = false;
 
     /**
@@ -910,6 +1012,14 @@ public class PoolProperties implements PoolConfiguration, Cloneable, Serializabl
     }
 
     /**
+     * <p>
+     * 一个连接池一般都需要淘汰过多限制的连接，因此{@code getMinEvictableIdleTimeMillis()}这个值一般都未true。
+     * 因此，一般都会创建PoolCleaner</br>
+     * 在大压力测试环境下面，我们不需要处理abandoned connection(调试目的)、sunspect abandoned以及淘汰空闲连接。
+     * 可以直接将<code>timeBetweenEvictionRunsMillis</code>设置为0，关闭后台线程。
+     * 这样，也可以避免对每个PooledConnection执行加锁操作
+     * </p>
+     * 
      * {@inheritDoc}
      */
 
