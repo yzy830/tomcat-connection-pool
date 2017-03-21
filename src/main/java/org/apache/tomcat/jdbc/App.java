@@ -38,10 +38,14 @@ public class App {
         pool.setRemoveAbandonedTimeout(60);
         pool.setLogAbandoned(true);
         pool.setDefaultTransactionIsolation(2);
+        pool.setUseEquals(false);
         
         try(Connection conn = pool.getConnection();
             Statement s = conn.createStatement();
             ResultSet rs = s.executeQuery("select * from pxsj_soa.t_d_order_base where order_id = 15")) {
+            
+            System.out.println("connection is closed: " + conn.isClosed());
+            
             while(rs.next()) {
                 System.out.println(rs.getLong("order_id"));
                 System.out.println(rs.getString("order_no"));

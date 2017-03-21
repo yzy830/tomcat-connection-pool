@@ -139,8 +139,7 @@ public class PoolProperties implements PoolConfiguration, Cloneable, Serializabl
     private volatile boolean fairQueue = true;
     /**
      * 这个值应该是可以设置为false的。只影响ConnectionProxy的比较操作，设置为false，ConnectionProxy使用"=="比较字符串</br>
-     * ConnectionProxy中的方法名全部是static final字符串，他应该是使用的方法区的字符串缓存。</br>
-     * <b>***********待测试***********</b>
+     * ConnectionProxy中的方法名全部是static final字符串，他应该是使用的方法区的字符串缓存。这个已经测试</br>
      */
     private volatile boolean useEquals = true;
     /**
